@@ -7,7 +7,7 @@ from multiprocessing import Process
 import sqlite3
 import sys
 
-conn = sqlite3.connect('PornHubDB.db')
+conn = sqlite3.connect('D:\sqlite\PornHub.db')
 db = conn.cursor()
 
 
@@ -42,29 +42,37 @@ class AllPagesCrawler:
                 for li in table.find_all('li'):
                     length = ''.join(li.find('var', class_='duration').contents).replace(':', '.')
                     if ''.join(li.find('var', class_='hd-thumbnail').contents) == 'HD':
-                        is_hd = True
+                        is_hd = 1
                     else:
-                        is_hd = False
-                    name  = ''.join(li.find('span', class_ = 'title').find('a').contents)
-                    self.fullpage = ({'ph_id': li.get('_vkey'), 'length_in_sec': int(
-                        (int(float(length)) * 60) + ((float(length) - int(float(length))) * 100)), 'is_hd': is_hd, 'name': name})
+                        is_hd = 0
+                    name = ''.join(li.find('span', class_='title').find('a').contents)
+                    self.notfullpage = ({'ph_id': li.get('_vkey'), 'length_in_sec': int(
+                        (int(float(length)) * 60) + ((float(length) - int(float(length))) * 100)), 'is_hd': is_hd,
+                                         'name': name})
                     # ---------------------------------------------DATA BASE------------------------------------------------
 
+                    if db.execute('SELECT ph_id FROM indexing WHERE ph_id = {fullpage[ph_id]};'.format(
+                            fullpage=self.notfullpage)).fetchone() == None:
+                        db.execute(
+                            'INSERT INTO index (ph_id, length_in_sec, is_hd, name) VALUES ( {fullpage[ph_id]}, {fullpage[length_in_sec]}, {fullpage[is_hd]}, {fullpage[name]})'.format(
+                                fullpage=self.notfullpage))
+                    else:
+                        continue
 
-                    db.execute('INSERT INTO index (ph_id, length_in_sec, is_hd, name) VALUES ( {fullpage[ph_id]}, {fullpage[length_in_sec]}, {fullpage[is_hd]}, {fullpage[name]})'.format(fullpage=self.fullpage))
                 self.fullpage.clear()
                 self.starter += 1
             else:
                 print('All Pages Already indexed')
                 return
 
+
 class OneVideoCrawler:
     def __init__(self):
         self.fullvideo = {}
 
-    def getting_full_video(self):
-
-        videoresponse = requests.get('https://www.pornhub.com/view_video.php?viewkey=' + 'vkey').text
+    def getting_full_video(self, vkey):
+        self.fullvideo['vkey'] = vkey
+        videoresponse = requests.get('https://www.pornhub.com/view_video.php?viewkey=' + vkey).text
         videosoup = BeautifulSoup(videoresponse, 'lxml')
 
         try:
@@ -81,8 +89,8 @@ class OneVideoCrawler:
             except KeyError:
                 pass
 
-            self.fullvideo['categories'] = categories
-
+            self.fullvideo['categories'] = ','.join(categories)
+            # ------------------------------------------Views------------------------------------------------------------
             views = (''.join(videosoup.find('div', class_='views').find('span', class_='count').contents))
 
             self.fullvideo['views'] = views
@@ -94,7 +102,7 @@ class OneVideoCrawler:
                         'a').contents)
 
             except AttributeError:
-                fromer = 'Null'
+                fromer = 'NULL'
 
             self.fullvideo['From'] = fromer
             # ----------------------------------------------PORNSTARS-------------------------------------------------------
@@ -104,7 +112,7 @@ class OneVideoCrawler:
                 for pornstar in videosoup.find('div', class_='pornstarsWrapper').find_all('a')[:-1]:
                     pornstars.append(pornstar.attrs['data-mxptext'])
 
-                self.fullvideo['Pornstars'] = pornstars
+                self.fullvideo['Pornstars'] = ','.join(pornstars)
             except KeyError:
                 pass
             # ----------------------------------------------TAGS--------------------------------------------------------
@@ -116,17 +124,17 @@ class OneVideoCrawler:
             except KeyError:
                 pass
 
-            self.fullvideo['tags'] = tags
+            self.fullvideo['tags'] = ','.join(tags)
             # ----------------------------------------------PRODUCTION--------------------------------------------------
 
             try:
                 for product in (videosoup.find('div', class_='productionWrapper').find_all('a')[:-1]):
                     if ''.join(product.contents) == 'professional':
-                        is_professional = True
+                        is_professional = 1
                     else:
-                        is_professional = False
+                        is_professional = 0
             except KeyError:
-                is_professional = 'Null'
+                is_professional = 'NULL'
 
             self.fullvideo['is_professional'] = is_professional
             # ----------------------------------------------LIKE--------------------------------------------------------
@@ -173,12 +181,60 @@ class OneVideoCrawler:
 
             try:
 
-                self.fullvideo['Featured_date'] = str(datetimefeautered)
+                self.fullvideo['featured_date'] = str(datetimefeautered)
                 self.fullvideo['AddedToPh'] = str(datetimeaddedto)
             except UnboundLocalError:
 
-                self.fullvideo['Featured_date'] = 'Null'
+                self.fullvideo['featured_date'] = 'NULL'
                 self.fullvideo['AddedToPh'] = str(datetimeaddedto)
+
+            self.fullvideo['datetime'] = datetime.datetime.now().replace(microsecond=0)
+            # --------------------------------------------Database------------------------------------------------------------------
+            # РИСКОВЫЙ БЛОК
+
+            # tags
+            db.execute('INSERT INTO tags (name) VALUES ({fullvideo[tags]})'.format(fullvideo=self.fullvideo))
+            # videotags
+            vtg = db.execute(
+                'SELECT id FROM tags WHERE name = "{fullvideo[tags]}"'.format(fullvideo=self.fullvideo)).fetchall()[-1][
+                0]
+            db.execute('INSERT INTO videotags (tags, ph_id, added) VALUES ("' + str(
+                vtg) + '", "{fullvideo[vkey]}", {fullvideo[datetime]})'.format(fullvideo=self.fullvideo))
+
+            # pornstars
+            db.execute('INSERT INTO pornstars (name) VALUES ({fullvideo[pornstars]})'.format(fullvideo=self.fullvideo))
+            # videopornstars
+            vps = db.execute('SELECT id FROM pornstars WHERE name = "{fullvideo[pornstars]}"'.format(
+                fullvideo=self.fullvideo)).fetchall()[-1][0]
+            db.execute('INSERT INTO videopornstars (pornstars, ph_id, added) VALUES ("' + str(
+                vps) + '", "{fullvideo[vkey]}", {fullvideo[datetime]})'.format(fullvideo=self.fullvideo))
+
+            # categories
+            db.execute(
+                'INSERT INTO categories (name) VALUES ({fullvideo[categories]})'.format(fullvideo=self.fullvideo))
+            # videocategories
+            vct = db.execute('SELECT id FROM categories WHERE name = "{fullvideo[categories]}"'.format(
+                fullvideo=self.fullvideo)).fetchall()[-1][0]
+            db.execute('INSERT INTO videocategories (categories, ph_id, added) VALUES ("' + str(
+                vct) + '", "{fullvideo[vkey]}", {fullvideo[datetime]})'.format(fullvideo=self.fullvideo))
+
+            # viewshistory
+            db.execute(
+                'INSERT INTO videocategories (ph_id, views, like, dislike, datetime) VALUES ("{fullvideo[vkey]}", "{fullvideo[views]}", {fullvideo[likes]}, {fullvideo[dislikes]}, {fullvideo[datetime]})'.format(
+                    fullvideo=self.fullvideo))
+
+            # from
+            if db.execute('SELECT producer FROM indexing WHERE ph_id = "{fullvideo[vkey]}"'.format(
+                    fullvideo=self.fullvideo)) == None:
+                # db.execute('INSERT INTO from (ph_id, name) VALUES ("{fullvideo[vkey]}", {fullvideo[from]})'.format(fullvideo=self.fullvideo))
+                db.execute('UPDATE from SET name = {fullvideo[from]}'.format(fullvideo=self.fullvideo))
+            else:
+                return
+
+            # ----------------------------------MAINTABLE----------------------------------------------------------------
+            db.execute(
+                'UPDATE indexing SET producer = "{fullvideo[from]}", is_professional = {fullvideo[is_professional]}, featured_date = "{fullvideo[featured_date]}", added_date = "{fullvideo[AddedToPh]}")'.format(
+                    fullvideo=self.fullvideo))
 
     def ifs(self, ins, numbertypes):
         if 'year' in ins:
@@ -207,5 +263,10 @@ class OneVideoCrawler:
         pass
 
 
-a = AllPagesCrawler()
-a.getting_full_page()
+b = OneVideoCrawler()
+
+# ------------------------------------------DATABASESELECT---------------------------------------------------------------
+db.execute('SELECT ph_id FROM indexing')
+for phid in db.execute('SELECT ph_id FROM indexing').fetchone():
+    # ПОВЕСИТЬ НА ПРОЦЕССЫ
+    b.getting_full_video(phid)
